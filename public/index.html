@@ -11,6 +11,11 @@
     <link rel="stylesheet" href="/styles.css" />
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
+
+    <!-- Firebase JS SDK (compat) for Firestore usage in the browser -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-auth-compat.js"></script>
   </head>
   <body>
     <div class="page-shell">
@@ -124,6 +129,7 @@
       </div>
     </div>
 
+    <script src="/firebase-config.js"></script>
     <script src="/consent.js"></script>
     <script src="/app.js"></script>
   </body>
