@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>khal live stream</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <div class="brand-wrap">
+          <div class="brand-mark">K</div>
+          <div>
+            <p class="eyebrow">LIVE</p>
+            <h1>khal live stream</h1>
+          </div>
+        </div>
+        <div class="live-pill" id="live-pill">Offline</div>
+      </header>
+
+      <main class="content-grid">
+        <section class="stream-panel">
+          <div class="stream-frame" id="stream-frame">
+            <video id="video" playsinline controls muted></video>
+            <div class="stream-placeholder" id="placeholder">
+              <div class="placeholder-badge">Stream Offline</div>
+              <p>Start your OBS stream and use the RTMP key below to go live.</p>
+            </div>
+          </div>
+
+          <div class="stream-meta">
+            <div>
+              <p class="meta-label">Channel</p>
+              <h2 id="channel-name">khal</h2>
+            </div>
+            <div>
+              <p class="meta-label">Viewers</p>
+              <h2 id="viewer-count">0</h2>
+            </div>
+          </div>
+
+          <div class="stream-info-card">
+            <h3>Stream setup</h3>
+            <div class="info-row">
+              <span>RTMP URL</span>
+              <strong>rtmp://localhost:1935/live</strong>
+            </div>
+            <div class="info-row">
+              <span>Stream key</span>
+              <strong>khal</strong>
+            </div>
+            <div class="info-row">
+              <span>HLS URL</span>
+              <strong>http://localhost:8080/hls/khal.m3u8</strong>
+            </div>
+          </div>
+        </section>
+
+        <aside class="chat-panel">
+          <div class="chat-header">
+            <h3>Live chat</h3>
+            <span id="chat-status">Ready</span>
+          </div>
+
+          <div class="chat-box" id="chat-box">
+            <div class="chat-message system">
+              Welcome to the khal live stream! Start your broadcast to begin chatting.
+            </div>
+          </div>
+
+          <form id="chat-form" class="chat-form">
+            <input id="username" type="text" maxlength="18" placeholder="Display name" value="Guest" />
+            <div class="chat-input-row">
+              <input id="message" type="text" maxlength="300" placeholder="Say something..." />
+              <button type="submit">Send</button>
+            </div>
+          </form>
+        </aside>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
