@@ -1,43 +1,17 @@
 # khal live stream
 
-A public-ready MVP for a Twitch-style live stream channel called `khal`.
+A public-ready Twitch-style live stream app for a single channel called `khal`.
 
-## What this includes
+## Features
 
-- Public-facing landing page and live stream viewer
-- Live chat via Socket.IO
-- RTMP ingest and HLS playback via nginx-rtmp
-- Environment-based configuration for public deployment
-- Docker Compose setup for streaming services
-- Production-friendly deployment notes for VPS / cloud hosting
+- Public web UI with a live viewer page
+- Live chat using Socket.IO
+- RTMP ingest for OBS
+- HLS playback for browser viewers
+- Production docker setup
+- Deployment guide for public hosting
 
-## Recommended stack
-
-- Frontend: Express + static HTML/CSS/JS
-- Realtime: Socket.IO
-- Streaming: nginx-rtmp + HLS
-- Deployment: Docker + reverse proxy (Nginx/Traefik)
-
-## Environment setup
-
-Create a `.env` file from the example:
-
-```bash
-cp .env.example .env
-```
-
-Then update values:
-
-```env
-APP_NAME="khal live stream"
-STREAM_CHANNEL="khal"
-PUBLIC_URL="https://your-domain.com"
-RTMP_URL="rtmp://your-domain.com:1935/live"
-HLS_URL="https://your-domain.com/hls/khal.m3u8"
-PORT=3000
-```
-
-## Start locally
+## Quick local start
 
 ```bash
 npm install
@@ -45,7 +19,7 @@ docker compose up -d
 npm start
 ```
 
-Then open:
+Open:
 
 ```text
 http://localhost:3000
@@ -53,49 +27,110 @@ http://localhost:3000
 
 OBS settings:
 
-- RTMP URL: `rtmp://localhost:1935/live`
-- Stream key: `khal`
+```text
+RTMP URL: rtmp://localhost:1935/live
+Stream key: khal
+```
 
-Viewer URL:
+HLS viewer:
 
 ```text
 http://localhost:8080/hls/khal.m3u8
 ```
 
-## Public deployment
+## Production deployment
 
-For public access, deploy this repo to a VPS or cloud server and use the public hostname instead of `localhost`.
+### 1) VPS / server setup
 
-Typical setup:
+Use any Ubuntu or Debian VPS with Docker installed.
 
-1. Run the app container on the server
-2. Expose port `3000` for the web UI
-3. Expose port `1935` for RTMP ingest
-4. Expose port `8080` for HLS viewing or proxy it behind HTTPS
-5. Put the app behind a reverse proxy (Nginx / Caddy / Traefik)
-6. Set HTTPS and a custom domain for `PUBLIC_URL`
+```bash
+sudo apt update
+sudo apt install -y docker.io docker-compose-plugin git nginx certbot python3-certbot-nginx
+sudo systemctl enable --now docker
+```
 
-Example reverse proxy location:
+### 2) Clone the repo
+
+```bash
+git clone https://github.com/khallive/khal-live-stream.git
+cd khal-live-stream
+cp .env.example .env
+```
+
+### 3) Set public environment values
+
+Update `.env`:
+
+```env
+APP_NAME="khal live stream"
+STREAM_CHANNEL="khal"
+PUBLIC_URL="https://stream.yourdomain.com"
+RTMP_URL="rtmp://stream.yourdomain.com:1935/live"
+HLS_URL="https://stream.yourdomain.com/hls/khal.m3u8"
+PORT=3000
+```
+
+### 4) Start the app in production mode
+
+```bash
+docker compose -f docker-compose.prod.yml up --build -d
+```
+
+### 5) Configure a public reverse proxy
+
+Create a site config for Nginx:
 
 ```nginx
 server {
-  listen 80;
-  server_name your-domain.com;
-
-  location / {
-    proxy_pass http://127.0.0.1:3000;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-  }
-
-  location /hls {
-    proxy_pass http://127.0.0.1:8080;
-    add_header Access-Control-Allow-Origin *;
-  }
+    listen 80;
+    server_name stream.yourdomain.com;
+    return 301 https://$host$request_uri;
 }
+
+server {
+    listen 443 ssl;
+    server_name stream.yourdomain.com;
+
+    ssl_certificate /etc/letsencrypt/live/stream.yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/stream.yourdomain.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location /hls {
+        proxy_pass http://127.0.0.1:8080;
+        add_header Access-Control-Allow-Origin *;
+    }
+}
+```
+
+### 6) Get SSL certificate
+
+```bash
+sudo certbot --nginx -d stream.yourdomain.com
+```
+
+### 7) OBS public stream settings
+
+Use the public domain in OBS:
+
+```text
+RTMP URL: rtmp://stream.yourdomain.com:1935/live
+Stream key: khal
+```
+
+Public viewer URL:
+
+```text
+https://stream.yourdomain.com
 ```
 
 ## Notes
 
-This is a public-ready MVP, not a full Twitch replacement. It is designed for simple streaming, chat, and browser viewing. To support user accounts, subscriptions, moderation, monetization, or scalable video delivery, add a database, auth system, and CDN-based delivery next.
+This project is a public deployment-ready MVP for one stream channel. It is suitable for local or server-hosted use but is not a full Twitch clone. It does not yet include multi-user auth, premium subscriptions, moderation dashboards, or enterprise-scale CDN delivery.
