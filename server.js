@@ -80,6 +80,8 @@ let channels = {
 
 // In-memory fallback for users when Firebase Admin is not initialized
 const inMemoryUsers = {}; // { userId: { followerCount, monetized, monetizedAt, earningsCents } }
+let inMemoryPlatformRevenue = 0;
+let inMemoryWithdrawals = {}; // id -> withdrawal
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
@@ -175,6 +177,16 @@ app.post('/create-checkout-session', async (req, res) => {
   }
 });
 
+// Helper to compute earnings and splits
+const OWNER_SHARE_PERCENT = Number(process.env.OWNER_SHARE_PERCENT || 40); // percent that owner/platform gets
+const PLATFORM_FEE_PERCENT = OWNER_SHARE_PERCENT; // alias
+
+function splitAmountCents(amountCents) {
+  const ownerShare = Math.round((amountCents * PLATFORM_FEE_PERCENT) / 100);
+  const streamerShare = amountCents - ownerShare;
+  return { ownerShare, streamerShare };
+}
+
 // Stripe webhook endpoint — needs raw body for signature verification
 app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   if (!stripe) {
@@ -221,16 +233,37 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
     if (admin) {
       try {
         const db = admin.firestore();
-        const txRef = db.collection('transactions').doc();
-        await txRef.set({
+
+        // Idempotency: use Stripe session id as transaction doc id
+        const txDoc = db.collection('transactions').doc(session.id);
+        const existing = await txDoc.get();
+        if (existing.exists) {
+          console.log('Transaction already processed:', session.id);
+          return res.json({ received: true });
+        }
+
+        const { ownerShare, streamerShare } = splitAmountCents(amount);
+
+        // Save transaction
+        await txDoc.set({
           giftId,
           giftName: gift ? gift.name : null,
           amountCents: amount,
+          ownerShareCents: ownerShare,
+          streamerShareCents: streamerShare,
           channel,
           username,
           stripeSessionId: session.id,
           createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
+
+        // Credit streamer earnings (add streamerShare)
+        const userRef = db.collection('users').doc(channel);
+        await userRef.set({ earningsCents: admin.firestore.FieldValue.increment(streamerShare) }, { merge: true });
+
+        // Credit platform/owner revenue
+        const platformRef = db.collection('platform').doc('revenue');
+        await platformRef.set({ totalCents: admin.firestore.FieldValue.increment(ownerShare) }, { merge: true });
 
         // Save a system message to channel messages collection
         const msgRef = db.collection('channels').doc(channel).collection('messages').doc();
@@ -243,9 +276,47 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
         });
 
         console.log('Recorded transaction and system message to Firestore');
+
+        // Notify the user (streamer) in their user room
+        io.to(`user:${channel}`).emit('gift-received', {
+          channel,
+          streamerShareCents: streamerShare,
+          ownerShareCents: ownerShare,
+          totalCents: amount,
+          message: messageText
+        });
       } catch (e) {
         console.error('Failed to write to Firestore:', e.message);
       }
+    } else {
+      // In-memory fallback
+      const { ownerShare, streamerShare } = splitAmountCents(amount);
+
+      inMemoryPlatformRevenue += ownerShare;
+      inMemoryUsers[channel] = inMemoryUsers[channel] || { followerCount: 0, monetized: false, monetizedAt: null, earningsCents: 0 };
+      inMemoryUsers[channel].earningsCents = (inMemoryUsers[channel].earningsCents || 0) + streamerShare;
+
+      // Store transaction idempotently
+      inMemoryWithdrawals[session.id] = {
+        id: session.id,
+        giftId,
+        amountCents: amount,
+        ownerShareCents: ownerShare,
+        streamerShareCents: streamerShare,
+        channel,
+        username,
+        createdAt: new Date().toISOString()
+      };
+
+      io.to(`user:${channel}`).emit('gift-received', {
+        channel,
+        streamerShareCents: streamerShare,
+        ownerShareCents: ownerShare,
+        totalCents: amount,
+        message: messageText
+      });
+
+      console.log('Processed in-memory transaction for session', session.id);
     }
   }
 
@@ -344,6 +415,106 @@ app.get('/api/users/:id/earnings', async (req, res) => {
     res.json({ id, earningsCents: user.earningsCents || 0, monetized: user.monetized || false });
   } catch (e) {
     console.error('earnings fetch failed', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Admin protection helper
+function requireAdmin(req, res, next) {
+  const token = req.headers['x-admin-token'] || req.query.admin_token;
+  if (!process.env.ADMIN_TOKEN) {
+    return res.status(401).json({ error: 'ADMIN_TOKEN not configured' });
+  }
+  if (token !== process.env.ADMIN_TOKEN) return res.status(401).json({ error: 'unauthorized' });
+  return next();
+}
+
+// Minimum withdrawal threshold (cents)
+const MIN_WITHDRAWAL_CENTS = Number(process.env.MIN_WITHDRAWAL_CENTS || 1000);
+
+// Create a withdrawal request (user requests payout)
+app.post('/api/users/:id/withdraw-request', async (req, res) => {
+  const { id } = req.params;
+  const { amountCents } = req.body; // optional, default to full balance
+
+  try {
+    const user = (await getUser(id)) || { earningsCents: 0 };
+    const balance = Number(user.earningsCents || 0);
+    const requestAmount = Number(amountCents || balance);
+
+    if (requestAmount <= 0) return res.status(400).json({ error: 'invalid amount' });
+    if (requestAmount > balance) return res.status(400).json({ error: 'insufficient balance' });
+    if (requestAmount < MIN_WITHDRAWAL_CENTS) return res.status(400).json({ error: `minimum withdrawal is ${MIN_WITHDRAWAL_CENTS} cents` });
+
+    // Deduct immediately (reserve funds)
+    if (admin) {
+      const db = admin.firestore();
+      const withdrawalRef = db.collection('withdrawals').doc();
+      await withdrawalRef.set({
+        userId: id,
+        amountCents: requestAmount,
+        status: 'requested',
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      // decrement user's earnings
+      await db.collection('users').doc(id).set({ earningsCents: admin.firestore.FieldValue.increment(-requestAmount) }, { merge: true });
+
+      res.json({ ok: true, withdrawalId: withdrawalRef.id });
+    } else {
+      // in-memory
+      const wid = `w_${Date.now()}`;
+      inMemoryWithdrawals[wid] = { id: wid, userId: id, amountCents: requestAmount, status: 'requested', createdAt: new Date().toISOString() };
+      inMemoryUsers[id] = inMemoryUsers[id] || { earningsCents: 0 };
+      inMemoryUsers[id].earningsCents = (inMemoryUsers[id].earningsCents || 0) - requestAmount;
+      res.json({ ok: true, withdrawalId: wid });
+    }
+  } catch (e) {
+    console.error('withdraw request failed', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Admin: list pending withdrawals
+app.get('/api/admin/withdrawals', requireAdmin, async (req, res) => {
+  try {
+    if (admin) {
+      const db = admin.firestore();
+      const q = await db.collection('withdrawals').where('status', '==', 'requested').get();
+      const items = [];
+      q.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
+      return res.json(items);
+    }
+
+    // in-memory
+    const items = Object.values(inMemoryWithdrawals).filter(w => w.status === 'requested');
+    res.json(items);
+  } catch (e) {
+    console.error('list withdrawals failed', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Admin: mark withdrawal complete (paid)
+app.post('/api/admin/withdrawals/:id/complete', requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (admin) {
+      const db = admin.firestore();
+      const ref = db.collection('withdrawals').doc(id);
+      await ref.set({ status: 'paid', paidAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      return res.json({ ok: true });
+    }
+
+    if (inMemoryWithdrawals[id]) {
+      inMemoryWithdrawals[id].status = 'paid';
+      inMemoryWithdrawals[id].paidAt = new Date().toISOString();
+      return res.json({ ok: true });
+    }
+
+    res.status(404).json({ error: 'withdrawal not found' });
+  } catch (e) {
+    console.error('complete withdrawal failed', e.message);
     res.status(500).json({ error: e.message });
   }
 });
