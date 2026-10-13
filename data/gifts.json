@@ -1,0 +1,23 @@
+[
+  {
+    "id": "rose",
+    "name": "Rose",
+    "priceCents": 100,
+    "image": "https://cdn.example.com/gifts/rose.png",
+    "description": "Send a rose to show love"
+  },
+  {
+    "id": "star",
+    "name": "Star",
+    "priceCents": 500,
+    "image": "https://cdn.example.com/gifts/star.png",
+    "description": "Send a shining star"
+  },
+  {
+    "id": "rocket",
+    "name": "Rocket",
+    "priceCents": 2000,
+    "image": "https://cdn.example.com/gifts/rocket.png",
+    "description": "Launch a rocket!"
+  }
+]

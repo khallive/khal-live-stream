@@ -2,7 +2,50 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
 const { Server } = require('socket.io');
+
+const STRIPE_SECRET = process.env.STRIPE_SECRET || '';
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
+const stripe = STRIPE_SECRET ? require('stripe')(STRIPE_SECRET) : null;
+
+const admin = (() => {
+  try {
+    const admin = require('firebase-admin');
+    let initialized = false;
+
+    if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+      const saPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+      const saJson = JSON.parse(fs.readFileSync(saPath, 'utf8'));
+      admin.initializeApp({
+        credential: admin.credential.cert(saJson),
+        storageBucket: process.env.FIREBASE_STORAGE_BUCKET || undefined
+      });
+      initialized = true;
+      console.log('Firebase Admin initialized using service account.');
+    } else if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
+      // Support for passing service account pieces as env vars (PRIVATE_KEY may have escaped newlines)
+      const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey
+        }),
+        storageBucket: process.env.FIREBASE_STORAGE_BUCKET || undefined
+      });
+      initialized = true;
+      console.log('Firebase Admin initialized using env vars.');
+    } else {
+      console.log('Firebase Admin not initialized — no service account provided. Firestore persistence disabled.');
+    }
+
+    return initialized ? admin : null;
+  } catch (e) {
+    console.log('firebase-admin not available or failed to init:', e.message);
+    return null;
+  }
+})();
 
 const app = express();
 const server = http.createServer(app);
@@ -20,7 +63,7 @@ const publicUrl = process.env.PUBLIC_URL || 'http://localhost:3000';
 const rtmpUrl = process.env.RTMP_URL || 'rtmp://localhost:1935/live';
 const hlsUrl = process.env.HLS_URL || 'http://localhost:8080/hls/khal.m3u8';
 
-const channels = {
+let channels = {
   [streamChannel]: {
     channel: streamChannel,
     name: appName,
@@ -36,6 +79,7 @@ const channels = {
 };
 
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json());
 
 app.get('/api/health', (req, res) => {
   res.json({
@@ -79,6 +123,133 @@ app.get('/api/channels', (req, res) => {
   res.json(Object.values(channels));
 });
 
+// Gifts catalog
+const gifts = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'gifts.json'), 'utf8'));
+
+app.get('/api/gifts', (req, res) => {
+  res.json(gifts);
+});
+
+// Create Stripe Checkout Session for a gift
+app.post('/create-checkout-session', async (req, res) => {
+  if (!stripe) return res.status(500).json({ error: 'Stripe not configured' });
+
+  const { giftId, channel = streamChannel, username = 'Guest', successUrl, cancelUrl, customerEmail } = req.body;
+  const gift = gifts.find(g => g.id === giftId);
+  if (!gift) return res.status(400).json({ error: 'Unknown gift' });
+
+  try {
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      mode: 'payment',
+      line_items: [
+        {
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: `${gift.name} (Gift to ${channel})`,
+              images: gift.image ? [gift.image] : []
+            },
+            unit_amount: gift.priceCents
+          },
+          quantity: 1
+        }
+      ],
+      metadata: {
+        giftId: gift.id,
+        channel,
+        username
+      },
+      success_url: successUrl || `${publicUrl}/?success=1`,
+      cancel_url: cancelUrl || `${publicUrl}/?canceled=1`,
+      customer_email: customerEmail || undefined
+    });
+
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error('create-checkout-session error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Stripe webhook endpoint — needs raw body for signature verification
+app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (!stripe) {
+    console.warn('Webhook received but stripe not configured');
+    return res.status(200).send('stripe not configured');
+  }
+
+  const sig = req.headers['stripe-signature'];
+  let event;
+
+  try {
+    if (STRIPE_WEBHOOK_SECRET) {
+      event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
+    } else {
+      // If no webhook secret provided, parse body directly — less secure (only for local/test)
+      event = JSON.parse(req.body.toString());
+    }
+  } catch (err) {
+    console.error('⚠️  Webhook signature verification failed.', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // Handle the checkout.session.completed event
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const metadata = session.metadata || {};
+    const giftId = metadata.giftId;
+    const channel = metadata.channel || streamChannel;
+    const username = metadata.username || 'Guest';
+
+    const gift = gifts.find(g => g.id === giftId);
+    const amount = session.amount_total || (gift ? gift.priceCents : 0);
+
+    const messageText = `${username} sent a ${gift ? gift.name : 'gift'} ♥`;
+
+    // Emit to live chat via socket.io
+    io.to(channel).emit('chat-message', {
+      username: 'System',
+      message: messageText,
+      time: new Date().toISOString()
+    });
+
+    // Persist transaction + chat message to Firestore if admin initialized
+    if (admin) {
+      try {
+        const db = admin.firestore();
+        const txRef = db.collection('transactions').doc();
+        await txRef.set({
+          giftId,
+          giftName: gift ? gift.name : null,
+          amountCents: amount,
+          channel,
+          username,
+          stripeSessionId: session.id,
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        // Save a system message to channel messages collection
+        const msgRef = db.collection('channels').doc(channel).collection('messages').doc();
+        await msgRef.set({
+          userId: null,
+          username: 'System',
+          text: messageText,
+          system: true,
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        console.log('Recorded transaction and system message to Firestore');
+      } catch (e) {
+        console.error('Failed to write to Firestore:', e.message);
+      }
+    }
+  }
+
+  res.json({ received: true });
+});
+
+// Fallback route to serve index.html
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
@@ -142,11 +313,24 @@ io.on('connection', (socket) => {
       return;
     }
 
+    // Emit to sockets
     io.to(safeChannel).emit('chat-message', {
       username: safeName,
       message: safeMessage,
       time: new Date().toISOString()
     });
+
+    // Persist to Firestore if available
+    if (admin) {
+      const db = admin.firestore();
+      db.collection('channels').doc(safeChannel).collection('messages').add({
+        userId: null,
+        username: safeName,
+        text: safeMessage,
+        system: false,
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      }).catch(e => console.error('failed to persist message', e.message));
+    }
   });
 
   socket.on('viewer-count', ({ channel, viewers }) => {

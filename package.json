@@ -11,6 +11,8 @@
   "dependencies": {
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "stripe": "^11.13.0",
+    "firebase-admin": "^11.10.0"
   }
 }
