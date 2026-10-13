@@ -1,5 +1,4 @@
 (function(){
-  // consent.js — shows a simple consent banner and loads AdSense only after acceptance
   const ADS_CLIENT = 'ca-pub-9211419038317507';
   const ADS_SRC = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADS_CLIENT}`;
 
@@ -16,10 +15,10 @@
   function getCookie(name) {
     const nameEQ = name + '=';
     const ca = document.cookie.split(';');
-    for(let i=0;i<ca.length;i++){
+    for (let i = 0; i < ca.length; i++) {
       let c = ca[i];
-      while (c.charAt(0)==' ') c = c.substring(1,c.length);
-      if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length,c.length);
+      while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+      if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
     }
     return null;
   }
@@ -35,15 +34,21 @@
     document.head.appendChild(s);
   }
 
-  function pushAds() {
-    // only run on non-localhost
+  function pushAllAds() {
     const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
     if (isLocal) return;
 
     loadAdsScript(function(){
       try {
-        (adsbygoogle = window.adsbygoogle || []).push({});
-      } catch(e){ console.warn('ads push failed', e); }
+        const adBlocks = document.querySelectorAll('.adsbygoogle');
+        const pushCount = adBlocks.length || 1;
+        window.adsbygoogle = window.adsbygoogle || [];
+        for (let i = 0; i < pushCount; i++) {
+          window.adsbygoogle.push({});
+        }
+      } catch (e) {
+        console.warn('ads push failed', e);
+      }
     });
   }
 
@@ -51,10 +56,11 @@
     const banner = document.getElementById('consent-banner');
     if (!banner) return;
     banner.classList.remove('hidden');
+
     document.getElementById('consent-accept').addEventListener('click', function(){
       setCookie('ads_consent', 'granted', 365);
       banner.classList.add('hidden');
-      pushAds();
+      pushAllAds();
     });
 
     document.getElementById('consent-decline').addEventListener('click', function(){
@@ -63,14 +69,12 @@
     });
   }
 
-  // init
   const consent = getCookie('ads_consent');
   if (consent === 'granted') {
-    pushAds();
+    pushAllAds();
   } else if (consent === 'denied') {
     // do nothing
   } else {
-    // show banner
     document.addEventListener('DOMContentLoaded', showBanner);
   }
 })();

@@ -1,11 +1,15 @@
-/* keep ad block visually contained */
+.ad-block-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .ad-block {
-  margin-top: 18px;
+  margin-top: 4px;
   padding-top: 8px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-/* Consent banner styles */
 .consent-banner {
   position: fixed;
   left: 0;
