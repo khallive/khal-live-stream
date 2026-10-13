@@ -1,57 +1,101 @@
 # khal live stream
 
-A lightweight Twitch-style live streaming MVP for a single channel named `khal`.
+A public-ready MVP for a Twitch-style live stream channel called `khal`.
 
-Features:
-- Stream page with live status and chat
-- OBS/RTMP ingest endpoint for local live streaming
-- HLS viewer output for browser playback
-- Simple Socket.IO chat for live viewers
-- Mobile-friendly interface
+## What this includes
 
-## Quick start
+- Public-facing landing page and live stream viewer
+- Live chat via Socket.IO
+- RTMP ingest and HLS playback via nginx-rtmp
+- Environment-based configuration for public deployment
+- Docker Compose setup for streaming services
+- Production-friendly deployment notes for VPS / cloud hosting
 
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
+## Recommended stack
 
-2. Start the RTMP + HLS server:
-   ```bash
-   docker compose up -d
-   ```
+- Frontend: Express + static HTML/CSS/JS
+- Realtime: Socket.IO
+- Streaming: nginx-rtmp + HLS
+- Deployment: Docker + reverse proxy (Nginx/Traefik)
 
-3. Start the app:
-   ```bash
-   npm start
-   ```
+## Environment setup
 
-4. Open the app in a browser:
-   ```text
-   http://localhost:3000
-   ```
+Create a `.env` file from the example:
 
-5. In OBS, configure:
-   - Stream type: `RTMP`
-   - URL: `rtmp://localhost:1935/live`
-   - Stream key: `khal`
+```bash
+cp .env.example .env
+```
 
-6. Watch the stream in-browser at:
-   ```text
-   http://localhost:8080/hls/khal.m3u8
-   ```
+Then update values:
 
-## Default channel
+```env
+APP_NAME="khal live stream"
+STREAM_CHANNEL="khal"
+PUBLIC_URL="https://your-domain.com"
+RTMP_URL="rtmp://your-domain.com:1935/live"
+HLS_URL="https://your-domain.com/hls/khal.m3u8"
+PORT=3000
+```
 
-The default stream channel is `khal`.
+## Start locally
 
-## App architecture
+```bash
+npm install
+docker compose up -d
+npm start
+```
 
-- Frontend: static HTML/CSS/JS served by Express
-- Backend: Node.js + Express + Socket.IO
-- Stream ingest: nginx-RTMP
-- Viewer playback: HLS via nginx
+Then open:
+
+```text
+http://localhost:3000
+```
+
+OBS settings:
+
+- RTMP URL: `rtmp://localhost:1935/live`
+- Stream key: `khal`
+
+Viewer URL:
+
+```text
+http://localhost:8080/hls/khal.m3u8
+```
+
+## Public deployment
+
+For public access, deploy this repo to a VPS or cloud server and use the public hostname instead of `localhost`.
+
+Typical setup:
+
+1. Run the app container on the server
+2. Expose port `3000` for the web UI
+3. Expose port `1935` for RTMP ingest
+4. Expose port `8080` for HLS viewing or proxy it behind HTTPS
+5. Put the app behind a reverse proxy (Nginx / Caddy / Traefik)
+6. Set HTTPS and a custom domain for `PUBLIC_URL`
+
+Example reverse proxy location:
+
+```nginx
+server {
+  listen 80;
+  server_name your-domain.com;
+
+  location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+
+  location /hls {
+    proxy_pass http://127.0.0.1:8080;
+    add_header Access-Control-Allow-Origin *;
+  }
+}
+```
 
 ## Notes
 
-This is meant to be a local MVP for development and demo use. If you want to expose it publicly, run it on a VPS or cloud server and update the OBS target and browser URLs to use the public IP / domain.
+This is a public-ready MVP, not a full Twitch replacement. It is designed for simple streaming, chat, and browser viewing. To support user accounts, subscriptions, moderation, monetization, or scalable video delivery, add a database, auth system, and CDN-based delivery next.

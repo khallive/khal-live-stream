@@ -2,13 +2,14 @@
   "name": "khal-live-stream",
   "version": "1.0.0",
   "private": true,
-  "description": "Twitch-style streaming app for the khal live stream channel",
+  "description": "Public-ready Twitch-style streaming app for the khal live stream channel",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js"
   },
   "dependencies": {
+    "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "socket.io": "^4.8.1"
   }

@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
@@ -12,34 +13,65 @@ const io = new Server(server, {
   }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT || 3000);
+const appName = process.env.APP_NAME || 'khal live stream';
+const streamChannel = process.env.STREAM_CHANNEL || 'khal';
+const publicUrl = process.env.PUBLIC_URL || 'http://localhost:3000';
+const rtmpUrl = process.env.RTMP_URL || 'rtmp://localhost:1935/live';
+const hlsUrl = process.env.HLS_URL || 'http://localhost:8080/hls/khal.m3u8';
 
 const channels = {
-  khal: {
-    channel: 'khal',
-    name: 'Khal Live Stream',
-    title: 'Live from Khal',
+  [streamChannel]: {
+    channel: streamChannel,
+    name: appName,
+    title: `${appName} is live`,
     isLive: false,
     viewers: 0,
     status: 'Offline',
-    streamKey: 'khal',
-    startedAt: null
+    streamKey: streamChannel,
+    startedAt: null,
+    streamUrl: rtmpUrl,
+    hlsUrl: hlsUrl
   }
 };
 
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/assets', express.static(path.join(__dirname, 'public')));
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, service: 'khal-live-stream', timestamp: new Date().toISOString() });
+  res.json({
+    ok: true,
+    service: 'khal-live-stream',
+    appName,
+    channel: streamChannel,
+    publicUrl,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/api/config', (req, res) => {
+  const channel = channels[streamChannel];
+  res.json({
+    appName,
+    channel: channel.channel,
+    streamKey: channel.streamKey,
+    publicUrl,
+    rtmpUrl,
+    hlsUrl,
+    streamChannel,
+    status: channel.status,
+    isLive: channel.isLive,
+    title: channel.title,
+    viewers: channel.viewers
+  });
 });
 
 app.get('/api/channel/:slug', (req, res) => {
   const { slug } = req.params;
-  const channel = channels[slug] || channels.khal;
+  const channel = channels[slug] || channels[streamChannel];
   res.json({
     ...channel,
-    streamUrl: `rtmp://localhost:1935/live/${slug}`
+    streamUrl: rtmpUrl,
+    hlsUrl
   });
 });
 
@@ -53,7 +85,7 @@ app.get('*', (req, res) => {
 
 io.on('connection', (socket) => {
   socket.on('join-channel', (channelName) => {
-    const channel = channelName || 'khal';
+    const channel = channelName || streamChannel;
     socket.join(channel);
 
     if (!channels[channel]) {
@@ -65,7 +97,9 @@ io.on('connection', (socket) => {
         viewers: 0,
         status: 'Offline',
         streamKey: channel,
-        startedAt: null
+        startedAt: null,
+        streamUrl: rtmpUrl,
+        hlsUrl: hlsUrl.replace(/khal/, channel)
       };
     }
 
@@ -73,7 +107,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('stream-status', ({ channel, isLive, title, viewers }) => {
-    const safeChannel = channel || 'khal';
+    const safeChannel = channel || streamChannel;
 
     if (!channels[safeChannel]) {
       channels[safeChannel] = {
@@ -84,7 +118,9 @@ io.on('connection', (socket) => {
         viewers: 0,
         status: 'Offline',
         streamKey: safeChannel,
-        startedAt: null
+        startedAt: null,
+        streamUrl: rtmpUrl,
+        hlsUrl: hlsUrl.replace(/khal/, safeChannel)
       };
     }
 
@@ -98,7 +134,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('chat-message', ({ channel, username, message }) => {
-    const safeChannel = channel || 'khal';
+    const safeChannel = channel || streamChannel;
     const safeName = String(username || 'Guest').slice(0, 18);
     const safeMessage = String(message || '').slice(0, 300);
 
@@ -114,7 +150,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('viewer-count', ({ channel, viewers }) => {
-    const safeChannel = channel || 'khal';
+    const safeChannel = channel || streamChannel;
 
     if (!channels[safeChannel]) {
       return;
@@ -126,5 +162,8 @@ io.on('connection', (socket) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`khal live stream is running on http://localhost:${PORT}`);
+  console.log(`${appName} is running on ${publicUrl}`);
+  console.log(`Stream key: ${streamChannel}`);
+  console.log(`RTMP target: ${rtmpUrl}`);
+  console.log(`HLS viewer: ${hlsUrl}`);
 });

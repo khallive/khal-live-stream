@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>khal live stream</title>
+    <meta name="description" content="khal live stream - public live streaming and chat" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -18,7 +19,7 @@
           <div class="brand-mark">K</div>
           <div>
             <p class="eyebrow">LIVE</p>
-            <h1>khal live stream</h1>
+            <h1 id="site-name">khal live stream</h1>
           </div>
         </div>
         <div class="live-pill" id="live-pill">Offline</div>
@@ -30,7 +31,7 @@
             <video id="video" playsinline controls muted></video>
             <div class="stream-placeholder" id="placeholder">
               <div class="placeholder-badge">Stream Offline</div>
-              <p>Start your OBS stream and use the RTMP key below to go live.</p>
+              <p id="status-copy">Start your OBS stream using the RTMP key below to go live.</p>
             </div>
           </div>
 
@@ -49,15 +50,15 @@
             <h3>Stream setup</h3>
             <div class="info-row">
               <span>RTMP URL</span>
-              <strong>rtmp://localhost:1935/live</strong>
+              <strong id="rtmp-url">rtmp://localhost:1935/live</strong>
             </div>
             <div class="info-row">
               <span>Stream key</span>
-              <strong>khal</strong>
+              <strong id="stream-key">khal</strong>
             </div>
             <div class="info-row">
-              <span>HLS URL</span>
-              <strong>http://localhost:8080/hls/khal.m3u8</strong>
+              <span>Public HLS URL</span>
+              <strong id="hls-url">http://localhost:8080/hls/khal.m3u8</strong>
             </div>
           </div>
         </section>
