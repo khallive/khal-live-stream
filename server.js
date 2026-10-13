@@ -78,6 +78,9 @@ let channels = {
   }
 };
 
+// In-memory fallback for users when Firebase Admin is not initialized
+const inMemoryUsers = {}; // { userId: { followerCount, monetized, monetizedAt, earningsCents } }
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
@@ -249,6 +252,128 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
   res.json({ received: true });
 });
 
+// --- Monetization / user follower endpoints ---
+// Policy: when a user's followerCount reaches >= 10,000 they are auto-enabled for monetization.
+// Earnings rule (simple): $1 per 1,000 followers (rounded down). Stored as cents in earningsCents.
+
+// Helper: get user from Firestore or in-memory fallback
+async function getUser(userId) {
+  if (admin) {
+    const db = admin.firestore();
+    const doc = await db.collection('users').doc(userId).get();
+    if (doc.exists) return doc.data();
+    return null;
+  }
+  return inMemoryUsers[userId] || null;
+}
+
+async function saveUser(userId, data) {
+  if (admin) {
+    const db = admin.firestore();
+    await db.collection('users').doc(userId).set(data, { merge: true });
+    return;
+  }
+  inMemoryUsers[userId] = Object.assign(inMemoryUsers[userId] || {}, data);
+}
+
+function computeEarningsCents(followerCount) {
+  // $1 per 1000 followers -> 100 cents per 1000 followers
+  const thousands = Math.floor(followerCount / 1000);
+  return thousands * 100; // cents
+}
+
+// Get user profile
+app.get('/api/users/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    let user = await getUser(id);
+    if (!user) {
+      // create a default user record
+      user = {
+        followerCount: 0,
+        monetized: false,
+        monetizedAt: null,
+        earningsCents: 0
+      };
+      await saveUser(id, user);
+    }
+
+    res.json({ id, ...user });
+  } catch (e) {
+    console.error('get user failed', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Increment followers (simple endpoint for testing or webhook integration)
+app.post('/api/users/:id/follow', async (req, res) => {
+  const { id } = req.params;
+  const { delta = 1 } = req.body;
+
+  try {
+    const existing = (await getUser(id)) || { followerCount: 0, monetized: false, monetizedAt: null, earningsCents: 0 };
+    const newCount = Number(existing.followerCount || 0) + Number(delta || 1);
+
+    const updates = { followerCount: newCount };
+
+    // Auto-enable monetization when threshold reached
+    if (!existing.monetized && newCount >= 10000) {
+      updates.monetized = true;
+      updates.monetizedAt = admin ? admin.firestore.FieldValue.serverTimestamp() : new Date().toISOString();
+      // initial earnings allocation based on follower count
+      updates.earningsCents = computeEarningsCents(newCount);
+
+      // emit notification to the user socket room (if any)
+      io.to(`user:${id}`).emit('monetization-enabled', { id, monetizedAt: updates.monetizedAt, earningsCents: updates.earningsCents });
+    }
+
+    await saveUser(id, updates);
+
+    res.json({ id, followerCount: newCount, monetized: updates.monetized || existing.monetized, earningsCents: updates.earningsCents || existing.earningsCents || 0 });
+  } catch (e) {
+    console.error('follow update failed', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get earnings summary
+app.get('/api/users/:id/earnings', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const user = (await getUser(id)) || { earningsCents: 0 };
+    res.json({ id, earningsCents: user.earningsCents || 0, monetized: user.monetized || false });
+  } catch (e) {
+    console.error('earnings fetch failed', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Admin: manually toggle monetization (protected in production — simple implementation here)
+app.post('/api/users/:id/monetize', async (req, res) => {
+  const { id } = req.params;
+  const { enable } = req.body; // boolean
+
+  try {
+    const existing = (await getUser(id)) || { followerCount: 0, monetized: false, monetizedAt: null, earningsCents: 0 };
+    const updates = {};
+    if (enable) {
+      if (!existing.monetized) {
+        updates.monetized = true;
+        updates.monetizedAt = admin ? admin.firestore.FieldValue.serverTimestamp() : new Date().toISOString();
+        updates.earningsCents = computeEarningsCents(existing.followerCount || 0);
+      }
+    } else {
+      updates.monetized = false;
+    }
+
+    await saveUser(id, updates);
+    res.json({ id, monetized: updates.monetized ?? existing.monetized, earningsCents: updates.earningsCents ?? existing.earningsCents });
+  } catch (e) {
+    console.error('monetize toggle failed', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Fallback route to serve index.html
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -275,6 +400,12 @@ io.on('connection', (socket) => {
     }
 
     socket.emit('stream-state', channels[channel]);
+  });
+
+  // allow sockets to subscribe to a user's personal room for monetization notices
+  socket.on('subscribe-user', (userId) => {
+    if (!userId) return;
+    socket.join(`user:${userId}`);
   });
 
   socket.on('stream-status', ({ channel, isLive, title, viewers }) => {
